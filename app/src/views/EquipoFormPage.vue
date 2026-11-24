@@ -96,6 +96,15 @@ const listaCategorias = ref<Categoria[]>([]);
 const estadoActual = ref<Estado>('disponible');
 const errores = ref<Record<string, string>>({});
 
+/** Vuelve a la lista: hacia atrás si hay historial, y si no (enlace directo) reemplaza la ruta. */
+function volverALista() {
+  if (ionRouter.canGoBack()) {
+    ionRouter.back();
+  } else {
+    ionRouter.replace('/tabs/equipos');
+  }
+}
+
 /**
  * TODO [M5] Al entrar a la página:
  *  - Cargar las categorías para el ion-select (categorias()).
@@ -106,7 +115,39 @@ const errores = ref<Record<string, string>>({});
  */
 onIonViewWillEnter(async () => {
   errores.value = {};
-  void [categorias, obtener, listaCategorias, estadoActual, ionRouter];
+
+  // Se parte siempre de un formulario limpio (la página queda en la pila de Ionic)
+  Object.assign(datos, vacio());
+  estadoActual.value = 'disponible';
+
+  try {
+    listaCategorias.value = await categorias();
+
+    if (id) {
+      const respuesta = await obtener(id);
+      // Tolerante: acepta que obtener() devuelva el equipo o el envoltorio { data }
+      const equipo = ((respuesta as any)?.data ?? respuesta) as any;
+
+      datos.codigo = equipo.codigo;
+      datos.nombre = equipo.nombre;
+      datos.categoria_id = equipo.categoria_id ?? equipo.categoria?.id ?? null;
+      datos.estado = equipo.estado;
+      datos.fecha_adquisicion = equipo.fecha_adquisicion
+        ? String(equipo.fecha_adquisicion).slice(0, 10)
+        : hoy;
+      datos.costo_interno = null; // la API no lo devuelve
+      estadoActual.value = equipo.estado;
+    }
+  } catch (e) {
+    if (e instanceof ErrorApi && e.status === 404) {
+      await mostrarToast('El equipo ya no existe.');
+      ionRouter.replace('/tabs/equipos');
+    } else if (e instanceof ErrorApi && e.status === 401) {
+      // api.ts ya limpió la sesión y navegó a /login
+    } else {
+      await mostrarToast('No se pudo cargar la información del equipo.');
+    }
+  }
 });
 
 /**
@@ -120,6 +161,47 @@ onIonViewWillEnter(async () => {
  *     404 → toast "El equipo ya no existe."   ·   otros → toast genérico.
  */
 async function guardar() {
-  void [loadingController, actualizar, crear, ErrorApi, mostrarToast, vibrar];
+  errores.value = {};
+
+  const loading = await loadingController.create({ message: 'Guardando…' });
+  await loading.present();
+
+  try {
+    // costo_interno llega como string desde ion-input type="number"
+    const costo = datos.costo_interno as unknown;
+    const costoNumerico = costo === null || costo === undefined || costo === '' ? null : Number(costo);
+
+    const { estado, ...resto } = datos;
+    const cuerpo = {
+      ...resto,
+      codigo: datos.codigo.trim().toUpperCase(),
+      nombre: datos.nombre.trim(),
+      costo_interno: costoNumerico,
+      // Un equipo prestado no puede cambiar de estado desde aquí: se omite el campo
+      ...(estadoActual.value !== 'prestado' ? { estado } : {}),
+    } as DatosEquipo;
+
+    if (id) {
+      await actualizar(id, cuerpo);
+    } else {
+      await crear(cuerpo);
+    }
+
+    vibrar();
+    await mostrarToast(id ? 'Equipo actualizado.' : 'Equipo creado.');
+    volverALista();
+  } catch (e) {
+    if (e instanceof ErrorApi && e.status === 422) {
+      errores.value = e.erroresPorCampo;
+    } else if (e instanceof ErrorApi && e.status === 404) {
+      await mostrarToast('El equipo ya no existe.');
+    } else if (e instanceof ErrorApi && e.status === 401) {
+      // api.ts ya limpió la sesión y navegó a /login
+    } else {
+      await mostrarToast('No se pudo guardar el equipo. Intente de nuevo.');
+    }
+  } finally {
+    await loading.dismiss();
+  }
 }
 </script>

@@ -63,18 +63,22 @@
 
       <!-- Listado -->
       <ion-list v-else>
-        <ion-item
-          v-for="equipo in equipos"
-          :key="equipo.id"
-          :router-link="`/tabs/equipos/${equipo.id}/editar`"
-          detail
-        >
-          <ion-label>
-            <h2>{{ equipo.nombre }}</h2>
-            <p>{{ equipo.codigo }} · {{ equipo.categoria?.nombre }}</p>
-          </ion-label>
-          <ion-badge slot="end" :color="colorEstado[equipo.estado]">{{ equipo.estado }}</ion-badge>
-        </ion-item>
+        <ion-item-sliding v-for="equipo in equipos" :key="equipo.id">
+          <ion-item :router-link="`/tabs/equipos/${equipo.id}/editar`" detail>
+            <ion-label>
+              <h2>{{ equipo.nombre }}</h2>
+              <p>{{ equipo.codigo }} · {{ equipo.categoria?.nombre }}</p>
+            </ion-label>
+            <ion-badge slot="end" :color="colorEstado[equipo.estado]">{{ equipo.estado }}</ion-badge>
+          </ion-item>
+
+          <ion-item-options side="end">
+            <ion-item-option color="danger" @click="confirmarEliminacion(equipo, $event)">
+              <ion-icon slot="start" :icon="trashOutline" />
+              Eliminar
+            </ion-item-option>
+          </ion-item-options>
+        </ion-item-sliding>
       </ion-list>
 
       <ion-infinite-scroll v-if="equipos.length > 0" :disabled="!hayMas" @ion-infinite="cargarMas">
@@ -178,6 +182,11 @@ async function cargarMas(evento: InfiniteScrollCustomEvent) {
   evento.target.complete();
 }
 
+/** Quita un equipo de la lista local sin volver a pedirla al servidor. */
+function quitarDeLaLista(idEquipo: Equipo['id']) {
+  equipos.value = equipos.value.filter((e) => e.id !== idEquipo);
+}
+
 /**
  * TODO [M6] confirmarEliminacion(equipo, evento)
  *  1. Cierre el ion-item-sliding.
@@ -189,7 +198,47 @@ async function cargarMas(evento: InfiniteScrollCustomEvent) {
  *       404 → quitarlo de la lista y avisar que ya no existe.
  */
 async function confirmarEliminacion(equipo: Equipo, evento: Event) {
-  void [equipo, evento, alertController, ErrorApi, mostrarToast, vibrar, eliminar];
+  // 1. Cerrar el ion-item-sliding que contiene el botón pulsado
+  const sliding = (evento.target as HTMLElement | null)?.closest('ion-item-sliding') as
+    | HTMLIonItemSlidingElement
+    | null;
+  await sliding?.close();
+
+  // 2. Confirmación: se decide por el role, no por el texto del botón
+  const alerta = await alertController.create({
+    header: 'Eliminar equipo',
+    message: `¿Eliminar "${equipo.nombre}" (${equipo.codigo})? Esta acción no se puede deshacer.`,
+    buttons: [
+      { text: 'Cancelar', role: 'cancel' },
+      { text: 'Eliminar', role: 'destructive' },
+    ],
+  });
+  await alerta.present();
+  const { role } = await alerta.onDidDismiss();
+  if (role !== 'destructive') return;
+
+  // 3. Eliminar en la API
+  try {
+    await eliminar(equipo.id); // 204
+    quitarDeLaLista(equipo.id);
+    vibrar();
+    await mostrarToast('Equipo eliminado.');
+  } catch (e) {
+    if (e instanceof ErrorApi && e.status === 409) {
+      // R1: equipo prestado. El equipo permanece en la lista.
+      const cuerpo = (e as any).cuerpo ?? (e as any).body ?? {};
+      await mostrarToast(
+        cuerpo.message ?? cuerpo.mensaje ?? 'No se puede eliminar un equipo que está prestado.',
+      );
+    } else if (e instanceof ErrorApi && e.status === 404) {
+      quitarDeLaLista(equipo.id);
+      await mostrarToast('El equipo ya no existe.');
+    } else if (e instanceof ErrorApi && e.status === 401) {
+      // api.ts ya limpió la sesión y navegó a /login
+    } else {
+      await mostrarToast('No se pudo eliminar el equipo. Intente de nuevo.');
+    }
+  }
 }
 
 void [refrescar, cargarMas, confirmarEliminacion, colorEstado, hayMas];

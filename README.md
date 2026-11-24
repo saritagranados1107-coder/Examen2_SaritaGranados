@@ -65,7 +65,7 @@ node: v26.8.1
 ionic: 7.2.1
 Capacitor: 8.6.2
 
-- ¿Se generó el APK de depuración? (sí/no):
+- ¿Se generó el APK de depuración? (sí/no): sí uwu
 
 ## Reglas
 

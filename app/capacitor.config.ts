@@ -17,3 +17,5 @@ const config: CapacitorConfig = {
     allowMixedContent: true,
   },
 };
+
+export default config;

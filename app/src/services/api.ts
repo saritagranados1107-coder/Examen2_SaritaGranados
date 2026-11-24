@@ -28,7 +28,76 @@ export interface OpcionesApi {
  *     Si el estado es 401 (y la ruta no es /login): await olvidarSesion() y router.replace('/login').
  *  8. En cualquier otro caso, devolver el cuerpo JSON.
  */
+
+/**-----Cliente HTTP único de la aplicación-------------*/
 export async function api<T = unknown>(ruta: string, opciones: OpcionesApi = {}): Promise<T> {
-  void [ErrorApi, obtenerToken, olvidarSesion, router, BASE_URL, TIEMPO_MAXIMO_MS, ruta, opciones];
-  throw new Error('TODO [M1] api() sin implementar');
+  const { method = 'GET', body, params } = opciones;
+
+  // 1. URL y query string solo con params que tengan valor
+  const query = new URLSearchParams();
+  if (params) {
+    for (const [clave, valor] of Object.entries(params)) {
+      if (valor !== undefined && valor !== null && valor !== '') {
+        query.append(clave, String(valor));
+      }
+    }
+  }
+  const qs = query.toString();
+  const url = `${BASE_URL}${ruta}${qs ? `?${qs}` : ''}`;
+
+  // 2, 3, 4. Cabeceras
+  const headers: Record<string, string> = { Accept: 'application/json' };
+
+  const token = obtenerToken();
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  const tieneCuerpo = body !== undefined;
+  if (tieneCuerpo) {
+    headers['Content-Type'] = 'application/json';
+  }
+
+  // 5. Tiempo máximo con AbortController
+  const controlador = new AbortController();
+  const temporizador = setTimeout(() => controlador.abort(), TIEMPO_MAXIMO_MS);
+
+  let respuesta: Response;
+  try {
+    respuesta = await fetch(url, {
+      method,
+      headers,
+      body: tieneCuerpo ? JSON.stringify(body) : undefined,
+      signal: controlador.signal,
+    });
+  } catch {
+    throw new ErrorApi(0, { mensaje: 'No fue posible conectar con la API.' });
+  } finally {
+    clearTimeout(temporizador);
+  }
+
+  // 6. 204 sin contenido
+  if (respuesta.status === 204) {
+    return null as T;
+  }
+
+  // Leer el cuerpo JSON de forma segura (puede venir vacío o no ser JSON)
+  let cuerpo: unknown = null;
+  try {
+    cuerpo = await respuesta.json();
+  } catch {
+    cuerpo = null;
+  }
+
+  // 7. Errores HTTP
+  if (!respuesta.ok) {
+    if (respuesta.status === 401 && ruta !== '/login' && ruta !== '/api/login') {
+      await olvidarSesion();
+      await router.replace('/login');
+    }
+    throw new ErrorApi(respuesta.status, cuerpo);
+  }
+
+  // 8. Éxito
+  return cuerpo as T;
 }

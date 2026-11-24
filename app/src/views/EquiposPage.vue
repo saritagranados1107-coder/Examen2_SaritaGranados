@@ -33,6 +33,53 @@
         TODO [M6] Eliminación (8 pts)
           - Envuelva cada ion-item en ion-item-sliding con un ion-item-option "Eliminar" (color danger).
       -->
+      <ion-refresher slot="fixed" @ion-refresh="refrescar">
+        <ion-refresher-content />
+      </ion-refresher>
+
+      <!-- Primera carga: esqueletos -->
+      <ion-list v-if="cargando && equipos.length === 0 && !error">
+        <ion-item v-for="n in 6" :key="n">
+          <ion-label>
+            <h2><ion-skeleton-text animated style="width: 60%" /></h2>
+            <p><ion-skeleton-text animated style="width: 40%" /></p>
+          </ion-label>
+          <ion-skeleton-text slot="end" animated style="width: 64px; height: 20px" />
+        </ion-item>
+      </ion-list>
+
+      <!-- Error de carga -->
+      <div v-else-if="error && equipos.length === 0" class="estado-vacio">
+        <ion-icon :icon="cloudOfflineOutline" size="large" />
+        <p>{{ error }}</p>
+        <ion-button fill="outline" @click="cargar(true)">Reintentar</ion-button>
+      </div>
+
+      <!-- Sin resultados -->
+      <div v-else-if="!cargando && equipos.length === 0" class="estado-vacio">
+        <ion-icon :icon="searchOutline" size="large" />
+        <p>{{ q ? 'No hay equipos que coincidan con la búsqueda.' : 'Todavía no hay equipos registrados.' }}</p>
+      </div>
+
+      <!-- Listado -->
+      <ion-list v-else>
+        <ion-item
+          v-for="equipo in equipos"
+          :key="equipo.id"
+          :router-link="`/tabs/equipos/${equipo.id}/editar`"
+          detail
+        >
+          <ion-label>
+            <h2>{{ equipo.nombre }}</h2>
+            <p>{{ equipo.codigo }} · {{ equipo.categoria?.nombre }}</p>
+          </ion-label>
+          <ion-badge slot="end" :color="colorEstado[equipo.estado]">{{ equipo.estado }}</ion-badge>
+        </ion-item>
+      </ion-list>
+
+      <ion-infinite-scroll v-if="equipos.length > 0" :disabled="!hayMas" @ion-infinite="cargarMas">
+        <ion-infinite-scroll-content />
+      </ion-infinite-scroll>
     </ion-content>
   </ion-page>
 </template>
@@ -52,7 +99,7 @@ import { ErrorApi } from '@/services/errores';
 import { mostrarToast } from '@/services/avisos';
 import { useConexion, vibrar } from '@/composables/useConexion';
 
-// Importaciones disponibles para su template (evita advertencias mientras no las use)
+// Importaciones disponibles para usar en el template (no es necesario importarlas explícitamente):
 void [IonRefresher, IonRefresherContent, IonList, IonItem, IonLabel, IonSkeletonText, IonBadge,
   IonItemSliding, IonItemOptions, IonItemOption, IonInfiniteScroll, IonInfiniteScrollContent,
   cloudOfflineOutline, searchOutline, trashOutline];
@@ -69,6 +116,9 @@ const cargando = ref(false);
 const error = ref('');
 const hayMas = computed(() => pagina.value < ultimaPagina.value);
 
+// Contador para descartar respuestas viejas (como una búsqueda anterior que responde tarde)
+let peticionActual = 0;
+
 /**
  * TODO [M4] cargar(reiniciar)
  *  - reiniciar = true  → pide la página 1 y REEMPLAZA la lista.
@@ -77,25 +127,55 @@ const hayMas = computed(() => pagina.value < ultimaPagina.value);
  *  - Maneje cargando y error (un 401 ya lo resuelve api.ts).
  */
 async function cargar(reiniciar = false) {
-  void [reiniciar, listar, equipos, pagina, ultimaPagina, cargando, error];
+  const id = ++peticionActual;
+  const paginaPedida = reiniciar ? 1 : pagina.value + 1;
+
+  cargando.value = true;
+  error.value = '';
+
+  try {
+    const respuesta = await listar(paginaPedida, q.value);
+    if (id !== peticionActual) return; // llegó una petición más nueva: se descarta esta
+
+    equipos.value = reiniciar ? respuesta.data : [...equipos.value, ...respuesta.data];
+    pagina.value = respuesta.meta.current_page;
+    ultimaPagina.value = respuesta.meta.last_page;
+  } catch (e) {
+    if (id !== peticionActual) return;
+    // Con un 401 api.ts ya limpió la sesión y navegó a /login
+    error.value =
+      e instanceof ErrorApi && e.status === 0
+        ? 'No fue posible conectar con la API.'
+        : 'No se pudo cargar el listado de equipos.';
+  } finally {
+    if (id === peticionActual) cargando.value = false;
+  }
 }
 
 /**
  * TODO [M4] La lista debe recargarse CADA VEZ que la persona vuelve a esta página
  *           (por ejemplo, al regresar del formulario). Elija el hook de ciclo de vida correcto.
  */
-void onIonViewWillEnter;
+onIonViewWillEnter(() => cargar(true));
 
-const buscar = () => cargar(true);
+const buscar = (evento: CustomEvent) => {
+  // Se lee el valor del evento para no depender del orden con que v-model actualiza q
+  q.value = (evento.detail?.value ?? '') as string;
+  return cargar(true);
+};
 
 /** TODO [M4] Recargar desde la página 1 y cerrar el refresher (evento.target.complete()). */
 async function refrescar(evento: RefresherCustomEvent) {
-  void evento;
+  await cargar(true);
+  evento.target.complete();
 }
 
 /** TODO [M4] Cargar la página siguiente y cerrar el infinite scroll (evento.target.complete()). */
 async function cargarMas(evento: InfiniteScrollCustomEvent) {
-  void evento;
+  if (hayMas.value && !cargando.value) {
+    await cargar(false);
+  }
+  evento.target.complete();
 }
 
 /**

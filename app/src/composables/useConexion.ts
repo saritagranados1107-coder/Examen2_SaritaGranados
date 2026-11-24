@@ -1,4 +1,7 @@
-import { ref } from 'vue';
+import { onUnmounted, ref } from 'vue';
+import { Capacitor, type PluginListenerHandle } from '@capacitor/core';
+import { Network } from '@capacitor/network';
+import { Haptics, ImpactStyle } from '@capacitor/haptics';
 
 /**
  * TODO [M7] Capacidades nativas (6 pts en total: este archivo, PerfilPage.vue y AndroidManifest.xml).
@@ -12,7 +15,41 @@ import { ref } from 'vue';
 export function useConexion() {
   const conectado = ref(true);
   const tipo = ref('unknown');
-  // TODO [M7]
+
+  let oyente: PluginListenerHandle | null = null;
+  let destruido = false;
+
+  // Valor inicial
+  Network.getStatus()
+    .then((estado) => {
+      conectado.value = estado.connected;
+      tipo.value = estado.connectionType;
+    })
+    .catch(() => {
+      // Si no se puede leer el estado, se conserva el valor por defecto (conectado).
+    });
+
+  // Actualización automática ante cambios de red
+  Network.addListener('networkStatusChange', (estado) => {
+    conectado.value = estado.connected;
+    tipo.value = estado.connectionType;
+  })
+    .then((handle) => {
+      // addListener devuelve una promesa: si la página ya se destruyó, se libera de inmediato
+      if (destruido) handle.remove();
+      else oyente = handle;
+    })
+    .catch(() => {
+      // Sin oyente: el estado inicial sigue siendo válido.
+    });
+
+  // Liberación del oyente al destruir la página que usa el composable
+  onUnmounted(() => {
+    destruido = true;
+    oyente?.remove();
+    oyente = null;
+  });
+
   return { conectado, tipo };
 }
 
@@ -22,5 +59,10 @@ export function useConexion() {
  *   Se llama después de guardar y de eliminar con éxito.
  */
 export async function vibrar() {
-  // TODO [M7]
+  if (!Capacitor.isNativePlatform()) return;
+  try {
+    await Haptics.impact({ style: ImpactStyle.Light });
+  } catch {
+    // Dispositivo sin vibrador o sin soporte: no debe interrumpir el flujo.
+  }
 }
